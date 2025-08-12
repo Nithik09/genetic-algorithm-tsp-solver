@@ -1,0 +1,203 @@
+import sys
+import pandas as pd
+import math
+import random
+import numpy as np
+import time
+import matplotlib.pyplot as plt
+
+def euclidean_distance_ga(state1, state2):
+    """Calculate Euclidean distance between two states."""
+    p1 = campus_dict[state1]
+    p2 = campus_dict[state2]
+    return math.sqrt((p1['x'] - p2['x'])**2 + (p1['y'] - p2['y'])**2)
+
+def generate_initial_population(population_size, campus_dict):
+    """Generate an initial population for Genetic Algorithm."""
+    population = []
+    start_state = list(campus_dict.keys())[0]
+    states = list(campus_dict.keys())[1:]  # Exclude start state
+    if len(states) < 2:
+        raise ValueError("ERROR: Not enough states for a valid population.")
+    
+    for _ in range(population_size):
+        individual = [start_state] + random.sample(states, len(states))
+        population.append(individual)
+    return population
+
+def calculate_fitness(individual):
+    """Calculate fitness as the inverse of the total path distance."""
+    total_distance = sum(
+        euclidean_distance_ga(individual[i], individual[i+1]) 
+        for i in range(len(individual) - 1)
+    ) + euclidean_distance_ga(individual[-1], individual[0])
+    return 1 / total_distance if total_distance > 0 else float('inf')
+
+def select_parents(population, fitnesses, elite_size):
+    """Roulette Wheel Selection with Elitism."""
+    if not population:
+        raise ValueError("ERROR: Population is empty. Check initial generation.")
+    
+    selected = []
+    idx = np.argsort(fitnesses)[::-1]
+    elite_size = min(elite_size, len(population))
+    elites = [population[i] for i in idx[:elite_size]]
+    selected.extend(elites)
+    
+    fitness_sum = sum(fitnesses)
+    selection_probs = [fitness / fitness_sum for fitness in fitnesses]
+    selected_indices = np.random.choice(idx, size=len(population)-elite_size, p=selection_probs)
+    selected.extend(population[i] for i in selected_indices)
+    
+    return selected
+
+def crossover(parent1, parent2, start_state):
+    """Partially-mapped crossover (PMX) for GA."""
+    size = len(parent1)
+    cp1, cp2 = sorted(random.sample(range(1, size-1), 2))
+    child = [start_state] + [None] * (size - 1)
+    
+    middle_segment = parent1[cp1:cp2]
+    child[cp1:cp2] = middle_segment
+    remaining_states = [state for state in parent2 if state not in middle_segment and state != start_state]
+    
+    child[1:cp1] = remaining_states[:cp1-1]
+    child[cp2:] = remaining_states[cp1-1:]
+    return child
+
+def mutate(individual, Pm):
+    """Mutation function swaps two random elements."""
+    if random.random() < Pm:
+        idx1, idx2 = random.sample(range(1, len(individual)), 2)
+        individual[idx1], individual[idx2] = individual[idx2], individual[idx1]
+    return individual
+
+def genetic_algorithm(campus_dict, N, K, Pm):
+    """Main Genetic Algorithm function."""
+    start_time = time.time()
+    elite_size = max(1, min(int(0.1 * N), N-1))
+    population = generate_initial_population(N, campus_dict)
+
+    min_cost_history, avg_cost_history, max_cost_history = [], [], []
+    
+    for generation in range(K):
+        fitnesses = [calculate_fitness(ind) for ind in population]
+        costs = [1 / fitness for fitness in fitnesses]
+        
+        min_cost_history.append(min(costs))
+        avg_cost_history.append(sum(costs) / len(costs))
+        max_cost_history.append(max(costs))
+        
+        population = select_parents(population, fitnesses, elite_size)
+        
+        offspring = []
+        for i in range(0, len(population) - 1, 2):
+            parent1, parent2 = population[i], population[i+1]
+            child1 = mutate(crossover(parent1, parent2, population[0][0]), Pm)
+            child2 = mutate(crossover(parent2, parent1, population[0][0]), Pm)
+            offspring.append(child1)
+            offspring.append(child2)
+        
+        population = offspring[:N]
+
+    best_index = np.argmax([calculate_fitness(ind) for ind in population])
+    final_path = population[best_index]
+    final_cost = 1 / calculate_fitness(final_path)
+
+    execution_time = time.time() - start_time
+    return final_path, execution_time, final_cost, min_cost_history, avg_cost_history, max_cost_history
+
+def plot_path_costs(iterations, min_cost_history, avg_cost_history, max_cost_history, p1, p2):
+    """Plot Cost Reduction Over Generations."""
+    plt.figure(figsize=(8, 5))
+    plt.plot(range(iterations), min_cost_history, color='green', linewidth=2, label="Min Cost")
+    plt.plot(range(iterations), avg_cost_history, color='blue', linewidth=2, label="Avg Cost")
+    plt.plot(range(iterations), max_cost_history, color='red', linewidth=2, label="Max Cost")
+
+    plt.title(f'Genetic Algorithm: Cost per Generation\nParameters: P1={p1}, P2={p2}')
+    plt.xlabel("Generation")
+    plt.ylabel("Path Cost")
+    plt.legend(loc='upper right')
+    plt.show()
+
+def save_csv(filename, best_solution, best_cost, execution_time):
+    """Save the best solution to a CSV file."""
+    with open(filename, 'w') as f:
+        f.write(f"{best_cost}\n")
+        f.write(f"Execution Time: {execution_time:.4f} seconds\n")
+        for state in best_solution:
+            f.write(f"{state}\n")
+
+if __name__ == "__main__":
+    if len(sys.argv) != 4:
+        print("ERROR: Incorrect number of arguments. Expected: <filename> <iterations> <mutation_prob>")
+        sys.exit(1)
+
+    filename, p1, p2 = sys.argv[1:]
+    
+    try:
+        df = pd.read_csv(filename, header=None, names=['State', 'x', 'y'], usecols=[0, 1, 2])  
+    except pd.errors.ParserError:
+        print("ERROR: CSV file is malformed. Ensure all rows have exactly 3 columns.")
+        sys.exit(1)
+
+    campus_dict = df.set_index('State')[['x', 'y']].T.apply(dict).to_dict()
+    initial_state = next(iter(campus_dict))  # First state from CSV
+
+    print(f"\nLast Name, First Name, A20563229 solution:")
+    print(f"Initial state: {initial_state}")
+
+    # Convert input parameters
+    num_iterations = int(p1)  
+    mutation_prob = float(p2)  
+    population_size = 100  
+
+    print(f"\nCommand Line Parameters: {filename}, {num_iterations}, {mutation_prob}\n")
+
+    distances = []
+    times = []
+    all_final_solutions = []
+    execution_times = []
+
+    for _ in range(5):  # Run GA for 5 iterations
+        final_solution, execution_time, final_cost, min_cost_history, avg_cost_history, max_cost_history = genetic_algorithm(
+            campus_dict, population_size, num_iterations, mutation_prob
+        )
+        distances.append(final_cost)
+        times.append(execution_time)
+        all_final_solutions.append(final_solution)
+        execution_times.append(execution_time)
+
+    # Select best solution (lowest cost)
+    best_index = distances.index(min(distances))
+    best_solution = all_final_solutions[best_index]
+    best_cost = distances[best_index]
+    best_time = times[best_index]
+
+    # Initial solution representation
+    initial_solution = list(campus_dict.keys())
+
+    print(f"Initial solution: {', '.join(df.loc[df['State'].isin(initial_solution), 'State'].values)}")
+    print(f"Final solution: {', '.join(df.loc[df['State'].isin(best_solution), 'State'].values)}\n")
+    print(f"Number of iterations: {num_iterations}")
+    print(f"Execution time: {execution_times[best_index]:.4f} seconds")
+    print(f"Complete path cost: {best_cost:.4f}\n")
+
+    # Compute additional statistics
+    avg_time = sum(times) / len(times)
+
+    print("\n--- Additional Statistics over 5 iterations ---")
+    print(f"Average Path Cost: {sum(distances) / len(distances):.4f}")
+    print(f"Minimum Path Cost: {min(distances):.4f}")
+    print(f"Maximum Path Cost: {max(distances):.4f}")
+    print(f"Average Execution Time: {avg_time:.4f} seconds")
+    print(f"Minimum Execution Time: {min(times):.4f} seconds")
+    print(f"Maximum Execution Time: {max(times):.4f} seconds")
+
+    # Save the best solution to a CSV file
+    save_csv(filename.replace(".csv", "_SOLUTION_GA.csv"), best_solution, best_cost, best_time)
+
+    # Plot cost reduction per generation for the best run
+    plot_path_costs(num_iterations, min_cost_history, avg_cost_history, max_cost_history, num_iterations, mutation_prob)
+Added Genetic Algorithm TSP Solver assignment files
+
